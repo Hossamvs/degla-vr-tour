@@ -8,11 +8,11 @@
   html, body { margin:0; height:100%; background:#111; overflow:hidden; font-family:system-ui,Segoe UI,Roboto,sans-serif; color:#fff; touch-action:none; -webkit-user-select:none; user-select:none; }
   #c { position:fixed; inset:0; width:100%; height:100%; display:block; }
   #fade { position:fixed; inset:0; background:#000; opacity:0; pointer-events:none; transition:opacity .35s; }
-  #bar { position:fixed; top:0; left:0; right:0; display:flex; gap:8px; align-items:center; padding:8px 10px; background:linear-gradient(#000a,#0000); z-index:5; }
+  #bar { position:fixed; top:0; left:0; right:0; display:flex; flex-wrap:wrap; gap:6px; align-items:center; padding:8px 10px; background:linear-gradient(#000a,#0000); z-index:5; }
   #title { flex:1; font-size:15px; font-weight:600; text-shadow:0 1px 3px #000; }
   button { background:#ffffff26; color:#fff; border:1px solid #ffffff55; border-radius:8px; padding:8px 12px; font-size:14px; backdrop-filter:blur(6px); }
   button.on { background:#2e8bff; border-color:#2e8bff; }
-  #menu { position:fixed; top:52px; right:10px; background:#000d; border-radius:10px; padding:6px; display:none; z-index:6; max-height:75vh; overflow:auto; }
+  #menu { position:fixed; top:96px; right:10px; background:#000d; border-radius:10px; padding:6px; display:none; z-index:6; max-height:75vh; overflow:auto; }
   #menu div { padding:10px 14px; font-size:15px; border-radius:6px; }
   #menu div:active { background:#ffffff33; }
   #hint { position:fixed; bottom:14px; left:0; right:0; text-align:center; font-size:13px; opacity:.85; text-shadow:0 1px 3px #000; pointer-events:none; }
@@ -28,6 +28,8 @@
   <button id="bGyro">Gyro</button>
   <button id="bVR">Cardboard VR</button>
   <button id="bMenu">Rooms</button>
+  <button id="bClose">Eyes closer</button>
+  <button id="bApart">Eyes apart</button>
 </div>
 <div id="menu"></div>
 <div id="hint">Drag to look around, tap a ring to move. For the headset: tap Cardboard VR, then look at a ring for 1.5 s.</div>
@@ -296,6 +298,19 @@ document.addEventListener('fullscreenchange', () => { if (vrOn && !document.full
 bMenu.onclick = () => { menu.style.display = menu.style.display==='block' ? 'none' : 'block'; };
 Object.entries(STOPS).forEach(([id,s]) => { const d=document.createElement('div'); d.textContent=s.name; d.onclick=()=>{ menu.style.display='none'; go(id); }; menu.appendChild(d); });
 
+// ---- eye spacing (Cardboard lenses are ~6.2 cm apart; the half-screens of a phone are usually further apart than that)
+let eyeAdj = Number(localStorage.getItem('eyeAdj') || 0);
+function eyeShift(){
+  const wcm = Math.max(innerWidth, innerHeight) / 160 * 2.54;            // approx physical screen width in cm (1 CSS px = 1/160 in on Android)
+  const base = ((wcm/2 - 6.2) / 2) / 2.54 * 160;                         // px each picture must move inwards
+  return Math.max(0, base + eyeAdj);
+}
+const bClose = document.getElementById('bClose'), bApart = document.getElementById('bApart');
+function showAdj(){ bClose.textContent = 'Eyes closer'; bApart.textContent = 'Eyes apart (' + Math.round(eyeShift()) + ')'; }
+bClose.onclick = () => { eyeAdj += 6; localStorage.setItem('eyeAdj', eyeAdj); showAdj(); };
+bApart.onclick = () => { eyeAdj -= 6; localStorage.setItem('eyeAdj', eyeAdj); showAdj(); };
+showAdj();
+
 function resize(){
   const w = innerWidth, h = innerHeight;
   renderer.setSize(w, h, false);
@@ -312,8 +327,10 @@ function frame(now){
   renderer.setScissorTest(true); renderer.clear();
   if (vrOn) {
     camera.aspect = (innerWidth/2)/innerHeight; camera.updateProjectionMatrix();
-    renderer.setViewport(0,0,w/2,h); renderer.setScissor(0,0,w/2,h); renderer.render(scene,camera);
-    renderer.setViewport(w/2,0,w/2,h); renderer.setScissor(w/2,0,w/2,h); renderer.render(scene,camera);
+    // shift each eye's picture towards the middle so the two image centres sit one eye-spacing apart (avoids double vision)
+    const d = eyeShift();
+    renderer.setViewport(d,0,w/2,h);     renderer.setScissor(0,0,w/2,h);   renderer.render(scene,camera);
+    renderer.setViewport(w/2-d,0,w/2,h); renderer.setScissor(w/2,0,w/2,h); renderer.render(scene,camera);
   } else {
     camera.aspect = innerWidth/innerHeight; camera.updateProjectionMatrix();
     renderer.setViewport(0,0,w,h); renderer.setScissor(0,0,w,h); renderer.render(scene,camera);
