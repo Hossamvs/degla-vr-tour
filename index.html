@@ -239,7 +239,9 @@ async function go(id, first){
 const DWELL = 1.5;
 let gazeT = 0, gazeTarget = null;
 function updateGaze(dt){
-  if (!vrOn || busy) { reticle.visible = vrOn; return; }
+  const gazeActive = vrOn || (gyroOn && haveDev);
+  reticle.visible = gazeActive && !vrOn ? true : vrOn;
+  if (!gazeActive || busy) return;
   ray.setFromCamera(new THREE.Vector2(0,0), camera);
   const hit = ray.intersectObjects(hotspots.map(h=>h.mesh), false)[0];
   const h = hit && hotspots.find(h=>h.mesh===hit.object);
@@ -284,7 +286,12 @@ function exitVR(){
 }
 // escape hatch inside the headset: double-tap the screen
 let lastTap = 0;
-window.addEventListener('touchend', () => { const n = Date.now(); if (vrOn && n-lastTap < 350) exitVR(); lastTap = n; });
+window.addEventListener('touchend', () => {
+  const n = Date.now();
+  if (gazeTarget && (vrOn || gyroOn)) { const to = gazeTarget.to; gazeTarget = null; gazeT = 0; go(to); lastTap = 0; return; }   // tap while looking at a ring = go now
+  if (vrOn && n-lastTap < 350) exitVR();
+  lastTap = n;
+});
 document.addEventListener('fullscreenchange', () => { if (vrOn && !document.fullscreenElement) exitVR(); });
 bMenu.onclick = () => { menu.style.display = menu.style.display==='block' ? 'none' : 'block'; };
 Object.entries(STOPS).forEach(([id,s]) => { const d=document.createElement('div'); d.textContent=s.name; d.onclick=()=>{ menu.style.display='none'; go(id); }; menu.appendChild(d); });
