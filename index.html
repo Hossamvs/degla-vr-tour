@@ -307,7 +307,8 @@ let last = performance.now();
 function frame(now){
   const dt = Math.min(.1, (now-last)/1000); last = now;
   applyView(); updateGaze(dt);
-  const w = renderer.domElement.width, h = renderer.domElement.height;
+  // three.js viewport/scissor are in CSS pixels (it multiplies by the pixel ratio itself)
+  const w = innerWidth, h = innerHeight;
   renderer.setScissorTest(true); renderer.clear();
   if (vrOn) {
     camera.aspect = (innerWidth/2)/innerHeight; camera.updateProjectionMatrix();
