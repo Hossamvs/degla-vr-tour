@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Degla apartment - VR tour</title>
+<style>
+  html, body { margin:0; height:100%; background:#111; overflow:hidden; font-family:system-ui,Segoe UI,Roboto,sans-serif; color:#fff; touch-action:none; -webkit-user-select:none; user-select:none; }
+  #c { position:fixed; inset:0; width:100%; height:100%; display:block; }
+  #fade { position:fixed; inset:0; background:#000; opacity:0; pointer-events:none; transition:opacity .35s; }
+  #bar { position:fixed; top:0; left:0; right:0; display:flex; gap:8px; align-items:center; padding:8px 10px; background:linear-gradient(#000a,#0000); z-index:5; }
+  #title { flex:1; font-size:15px; font-weight:600; text-shadow:0 1px 3px #000; }
+  button { background:#ffffff26; color:#fff; border:1px solid #ffffff55; border-radius:8px; padding:8px 12px; font-size:14px; backdrop-filter:blur(6px); }
+  button.on { background:#2e8bff; border-color:#2e8bff; }
+  #menu { position:fixed; top:52px; right:10px; background:#000d; border-radius:10px; padding:6px; display:none; z-index:6; max-height:75vh; overflow:auto; }
+  #menu div { padding:10px 14px; font-size:15px; border-radius:6px; }
+  #menu div:active { background:#ffffff33; }
+  #hint { position:fixed; bottom:14px; left:0; right:0; text-align:center; font-size:13px; opacity:.85; text-shadow:0 1px 3px #000; pointer-events:none; }
+  #loading { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; background:#111; z-index:9; font-size:18px; }
+  body.vr #bar, body.vr #hint { display:none; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="fade"></div>
+<div id="bar">
+  <div id="title">Loading...</div>
+  <button id="bGyro">Gyro</button>
+  <button id="bVR">Cardboard VR</button>
+  <button id="bMenu">Rooms</button>
+</div>
+<div id="menu"></div>
+<div id="hint">Drag to look around, tap a ring to move. For the headset: tap Cardboard VR, then look at a ring for 1.5 s.</div>
+<div id="loading">Loading tour...</div>
+<script src="three.min.js"></script>
+<script>
+// ---------- tour data (coordinates are plan metres: x = east, y = north) ----------
+const EYE = 1.6;
+const STOPS = {
+  living_a:      {name:'Living room',            x:1.8, y:5.9,  head:0,
+    links:[{to:'living_garden'},{to:'dining', via:[1.8,7.6]}]},
+  living_garden: {name:'Living room - garden door', x:1.6, y:4.75, head:180,
+    links:[{to:'living_a'},{to:'deck', via:[1.6,4.0]}]},
+  dining:        {name:'Dining and entry',       x:3.5, y:8.9,  head:270,
+    links:[{to:'living_a', via:[1.8,7.6]},{to:'hall_w'}]},
+  hall_w:        {name:'Hallway (west)',         x:5.6, y:8.1,  head:90,
+    links:[{to:'dining'},{to:'kitchen_a'},{to:'gaming', via:[5.4,7.5]},{to:'hall_e'}]},
+  kitchen_a:     {name:'Kitchen',                x:5.8, y:9.45, head:0,
+    links:[{to:'hall_w'},{to:'hall_e'}]},
+  hall_e:        {name:'Hallway (east)',         x:6.9, y:8.2,  head:270,
+    links:[{to:'hall_w'},{to:'kitchen_a'},{to:'bedroom', via:[7.3,7.5]},{to:'bath', via:[7.9,8.1]}]},
+  gaming:        {name:'Gaming room',            x:5.4, y:6.5,  head:180,
+    links:[{to:'hall_w', via:[5.4,7.5]}]},
+  bedroom:       {name:'Bedroom',                x:7.9, y:6.9,  head:200,
+    links:[{to:'hall_e', via:[7.3,7.5]}]},
+  bath:          {name:'Bathroom',               x:8.9, y:8.4,  head:270,
+    links:[{to:'hall_e', via:[7.9,8.1]}]},
+  deck:          {name:'Garden - deck',          x:1.6, y:3.45, head:0,
+    links:[{to:'living_garden', via:[1.6,4.0]},{to:'gate', via:[1.1,2.0]}]},
+  gate:          {name:'Garden - gate',          x:1.05, y:1.0, head:0, z:0.72,
+    links:[{to:'deck', via:[1.1,2.0]}]}
+};
+const START = 'living_a';
+
+// ---------- renderer ----------
+const canvas = document.getElementById('c');
+const renderer = new THREE.WebGLRenderer({canvas, antialias:true});
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.autoClear = false;
+renderer.outputEncoding = THREE.sRGBEncoding;
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(75, 1, 0.1, 2000);
+scene.add(camera);
+
+// sphere with explicit equirect mapping: forward (three -z) = north, +x = east
+function makePanoSphere(R, N, M) {
+  const pos=[], uv=[], idx=[];
+  for (let j=0;j<=M;j++) {
+    const lat = Math.PI/2 - Math.PI*j/M;
+    for (let i=0;i<=N;i++) {
+      const lon = -Math.PI + 2*Math.PI*i/N;
+      const wx=Math.cos(lat)*Math.sin(lon), wy=Math.cos(lat)*Math.cos(lon), wz=Math.sin(lat);
+      pos.push(wx*R, wz*R, -wy*R);
+      uv.push(i/N, 1-j/M);
+    }
+  }
+  for (let j=0;j<M;j++) for (let i=0;i<N;i++) {
+    const a=j*(N+1)+i, b=a+N+1;
+    idx.push(a,b,a+1, b,b+1,a+1);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos,3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(uv,2));
+  g.setIndex(idx);
+  return g;
+}
+const panoMat = new THREE.MeshBasicMaterial({color:0xffffff, side:THREE.DoubleSide, depthWrite:false});
+const pano = new THREE.Mesh(makePanoSphere(500, 96, 48), panoMat);
+pano.renderOrder = 0;
+scene.add(pano);
+
+// textures
+const loader = new THREE.TextureLoader();
+const cache = {};
+function getTex(id) {
+  if (cache[id]) return cache[id];
+  cache[id] = new Promise((res, rej) => loader.load('pano/'+id+'.jpg', t => {
+    t.generateMipmaps=false; t.minFilter=THREE.LinearFilter; t.magFilter=THREE.LinearFilter;
+    t.encoding = THREE.sRGBEncoding; res(t);
+  }, undefined, rej));
+  return cache[id];
+}
+
+// ---------- hotspots ----------
+const hotspotGroup = new THREE.Group();
+scene.add(hotspotGroup);
+let hotspots = [];
+function makeLabel(text) {
+  const c = document.createElement('canvas'); c.width=512; c.height=96;
+  const x = c.getContext('2d');
+  x.fillStyle='rgba(0,0,0,.6)'; x.beginPath(); x.roundRect ? x.roundRect(4,8,504,80,20) : x.rect(4,8,504,80); x.fill();
+  x.fillStyle='#fff'; x.font='bold 44px sans-serif'; x.textAlign='center'; x.textBaseline='middle'; x.fillText(text,256,50);
+  const t = new THREE.CanvasTexture(c);
+  const s = new THREE.Sprite(new THREE.SpriteMaterial({map:t, depthTest:false, transparent:true}));
+  s.scale.set(26,4.9,1); s.renderOrder=11;
+  return s;
+}
+function buildHotspots(id) {
+  hotspots.forEach(h => hotspotGroup.remove(h.group));
+  hotspots = [];
+  const s = STOPS[id];
+  s.links.forEach(l => {
+    const t = STOPS[l.to];
+    const tx = l.via ? l.via[0] : t.x, ty = l.via ? l.via[1] : t.y;
+    const dx = tx-s.x, dy = ty-s.y, dist = Math.hypot(dx,dy);
+    const lon = Math.atan2(dx, dy);
+    const el = -Math.atan2(EYE, Math.min(Math.max(dist,1.6), 3.6));
+    const R = 60;
+    const g = new THREE.Group();
+    g.position.set(Math.sin(lon)*Math.cos(el)*R, Math.sin(el)*R, -Math.cos(lon)*Math.cos(el)*R);
+    g.lookAt(0,0,0);
+    const ring = new THREE.Mesh(new THREE.RingGeometry(3.2,4,48), new THREE.MeshBasicMaterial({color:0xffffff, transparent:true, opacity:.95, depthTest:false}));
+    const disc = new THREE.Mesh(new THREE.CircleGeometry(3.2,48), new THREE.MeshBasicMaterial({color:0x2e8bff, transparent:true, opacity:.35, depthTest:false}));
+    const fill = new THREE.Mesh(new THREE.CircleGeometry(3.2,48), new THREE.MeshBasicMaterial({color:0xffffff, transparent:true, opacity:.8, depthTest:false}));
+    fill.scale.set(.001,.001,1); fill.position.z = .01;
+    ring.renderOrder=10; disc.renderOrder=9; fill.renderOrder=10;
+    g.add(disc, ring, fill);
+    const lab = makeLabel(t.name); lab.position.set(0, 0, 0); g.add(lab);
+    // label above the ring, in the ring's own up direction
+    lab.position.y = 7;
+    hotspotGroup.add(g);
+    hotspots.push({group:g, fill, to:l.to, mesh:disc, ring});
+  });
+}
+
+// ---------- gaze reticle (child of camera) ----------
+const reticle = new THREE.Mesh(new THREE.RingGeometry(0.008,0.014,32), new THREE.MeshBasicMaterial({color:0xffffff, depthTest:false, transparent:true, opacity:.9}));
+reticle.position.z = -1; reticle.renderOrder = 20; reticle.visible = false;
+camera.add(reticle);
+
+// ---------- view control ----------
+let yaw = 0, pitch = 0;               // touch mode (radians)
+let gyroOn = false, vrOn = false;
+const devQ = new THREE.Quaternion(), offQ = new THREE.Quaternion();
+let devAlpha=0, devBeta=0, devGamma=0, haveDev=false, yawOffset=0;
+const _e = new THREE.Euler(), _q1 = new THREE.Quaternion(-Math.sqrt(0.5),0,0,Math.sqrt(0.5)), _q0 = new THREE.Quaternion(), _z = new THREE.Vector3(0,0,1);
+function screenAngle(){ return (screen.orientation && screen.orientation.angle != null ? screen.orientation.angle : (window.orientation||0)) * Math.PI/180; }
+function deviceQuat(out){
+  _e.set(devBeta*Math.PI/180, devAlpha*Math.PI/180, -devGamma*Math.PI/180, 'YXZ');
+  out.setFromEuler(_e); out.multiply(_q1); out.multiply(_q0.setFromAxisAngle(_z, -screenAngle()));
+  return out;
+}
+window.addEventListener('deviceorientation', e => {
+  if (e.alpha == null) return;
+  devAlpha=e.alpha; devBeta=e.beta; devGamma=e.gamma; haveDev=true;
+});
+function currentYawOfDevice(){
+  deviceQuat(devQ);
+  const f = new THREE.Vector3(0,0,-1).applyQuaternion(devQ);
+  return Math.atan2(f.x, -f.z);
+}
+function calibrate(headDeg){
+  if (!haveDev) return;
+  yawOffset = headDeg*Math.PI/180 - currentYawOfDevice();
+}
+function applyView(){
+  if (gyroOn && haveDev) {
+    deviceQuat(devQ);
+    offQ.setFromAxisAngle(new THREE.Vector3(0,1,0), -yawOffset);
+    camera.quaternion.copy(offQ).multiply(devQ);
+  } else {
+    camera.rotation.set(pitch, -yaw, 0, 'YXZ');
+  }
+}
+
+// touch/mouse drag
+let dragging=false, moved=false, lx=0, ly=0;
+canvas.addEventListener('pointerdown', e => { dragging=true; moved=false; lx=e.clientX; ly=e.clientY; });
+window.addEventListener('pointerup', e => {
+  if (dragging && !moved && !vrOn) tapAt(e.clientX, e.clientY);
+  dragging=false;
+});
+window.addEventListener('pointermove', e => {
+  if (!dragging || (gyroOn && haveDev)) return;
+  const dx=e.clientX-lx, dy=e.clientY-ly; lx=e.clientX; ly=e.clientY;
+  if (Math.abs(dx)+Math.abs(dy) > 1) moved = true;
+  const k = camera.fov/ (canvas.clientHeight||600) * Math.PI/180;
+  yaw -= dx*k; pitch = Math.max(-1.45, Math.min(1.45, pitch + dy*k));
+});
+const ray = new THREE.Raycaster();
+function tapAt(px, py){
+  ray.setFromCamera(new THREE.Vector2(px/innerWidth*2-1, -(py/innerHeight*2-1)), camera);
+  const hit = ray.intersectObjects(hotspots.map(h=>h.mesh), false)[0];
+  if (hit) { const h = hotspots.find(h=>h.mesh===hit.object); if (h) go(h.to); }
+}
+
+// ---------- navigation ----------
+let current = null, busy = false;
+const fade = document.getElementById('fade');
+const titleEl = document.getElementById('title');
+async function go(id, first){
+  if (busy || id === current) return;
+  busy = true;
+  if (!first) { fade.style.opacity = 1; await new Promise(r=>setTimeout(r, 360)); }
+  const tex = await getTex(id);
+  panoMat.map = tex; panoMat.needsUpdate = true;
+  current = id;
+  const s = STOPS[id];
+  titleEl.textContent = s.name;
+  buildHotspots(id);
+  if (first) { yaw = s.head*Math.PI/180; pitch = 0; if (gyroOn) calibrate(s.head); }
+  fade.style.opacity = 0;
+  busy = false;
+  gazeT = 0; gazeTarget = null;
+  STOPS[id].links.forEach(l => getTex(l.to));   // preload neighbours
+}
+
+// ---------- gaze selection ----------
+const DWELL = 1.5;
+let gazeT = 0, gazeTarget = null;
+function updateGaze(dt){
+  if (!vrOn || busy) { reticle.visible = vrOn; return; }
+  ray.setFromCamera(new THREE.Vector2(0,0), camera);
+  const hit = ray.intersectObjects(hotspots.map(h=>h.mesh), false)[0];
+  const h = hit && hotspots.find(h=>h.mesh===hit.object);
+  if (h) {
+    if (gazeTarget !== h) { if (gazeTarget) gazeTarget.fill.scale.set(.001,.001,1); gazeTarget = h; gazeT = 0; }
+    gazeT += dt;
+    const p = Math.min(1, gazeT/DWELL);
+    h.fill.scale.set(Math.max(.001,p), Math.max(.001,p), 1);
+    if (gazeT >= DWELL) { const to = h.to; gazeTarget = null; gazeT = 0; go(to); }
+  } else if (gazeTarget) { gazeTarget.fill.scale.set(.001,.001,1); gazeTarget = null; gazeT = 0; }
+}
+
+// ---------- UI ----------
+const bGyro = document.getElementById('bGyro'), bVR = document.getElementById('bVR'), bMenu = document.getElementById('bMenu'), menu = document.getElementById('menu');
+async function enableGyro(){
+  try {
+    if (typeof DeviceOrientationEvent !== 'undefined' && DeviceOrientationEvent.requestPermission) {
+      const r = await DeviceOrientationEvent.requestPermission(); if (r !== 'granted') return false;
+    }
+  } catch(e){ return false; }
+  gyroOn = true; bGyro.classList.add('on');
+  setTimeout(()=>calibrate(STOPS[current].head), 400);
+  return true;
+}
+function disableGyro(){ gyroOn = false; bGyro.classList.remove('on'); }
+bGyro.onclick = async () => { gyroOn ? disableGyro() : await enableGyro(); };
+bVR.onclick = async () => {
+  if (!vrOn) {
+    if (!gyroOn) await enableGyro();
+    vrOn = true; document.body.classList.add('vr'); bVR.classList.add('on');
+    try { await document.documentElement.requestFullscreen(); } catch(e){}
+    try { await screen.orientation.lock('landscape'); } catch(e){}
+    try { navigator.wakeLock && navigator.wakeLock.request('screen'); } catch(e){}
+    camera.fov = 90; menu.style.display='none';
+  } else exitVR();
+};
+function exitVR(){
+  vrOn = false; document.body.classList.remove('vr'); bVR.classList.remove('on'); reticle.visible=false;
+  camera.fov = 75; if (document.fullscreenElement) document.exitFullscreen().catch(()=>{});
+  try { screen.orientation.unlock(); } catch(e){}
+  resize();
+}
+// escape hatch inside the headset: double-tap the screen
+let lastTap = 0;
+window.addEventListener('touchend', () => { const n = Date.now(); if (vrOn && n-lastTap < 350) exitVR(); lastTap = n; });
+document.addEventListener('fullscreenchange', () => { if (vrOn && !document.fullscreenElement) exitVR(); });
+bMenu.onclick = () => { menu.style.display = menu.style.display==='block' ? 'none' : 'block'; };
+Object.entries(STOPS).forEach(([id,s]) => { const d=document.createElement('div'); d.textContent=s.name; d.onclick=()=>{ menu.style.display='none'; go(id); }; menu.appendChild(d); });
+
+function resize(){
+  const w = innerWidth, h = innerHeight;
+  renderer.setSize(w, h, false);
+  camera.aspect = vrOn ? (w/2)/h : w/h; camera.updateProjectionMatrix();
+}
+window.addEventListener('resize', resize); resize();
+
+let last = performance.now();
+function frame(now){
+  const dt = Math.min(.1, (now-last)/1000); last = now;
+  applyView(); updateGaze(dt);
+  const w = renderer.domElement.width, h = renderer.domElement.height;
+  renderer.setScissorTest(true); renderer.clear();
+  if (vrOn) {
+    camera.aspect = (innerWidth/2)/innerHeight; camera.updateProjectionMatrix();
+    renderer.setViewport(0,0,w/2,h); renderer.setScissor(0,0,w/2,h); renderer.render(scene,camera);
+    renderer.setViewport(w/2,0,w/2,h); renderer.setScissor(w/2,0,w/2,h); renderer.render(scene,camera);
+  } else {
+    camera.aspect = innerWidth/innerHeight; camera.updateProjectionMatrix();
+    renderer.setViewport(0,0,w,h); renderer.setScissor(0,0,w,h); renderer.render(scene,camera);
+  }
+  requestAnimationFrame(frame);
+}
+go(START, true).then(() => { document.getElementById('loading').style.display='none'; requestAnimationFrame(frame); });
+</script>
+</body>
+</html>
