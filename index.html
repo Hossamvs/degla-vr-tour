@@ -17,7 +17,9 @@
   #menu div:active { background:#ffffff33; }
   #hint { position:fixed; bottom:14px; left:0; right:0; text-align:center; font-size:13px; opacity:.85; text-shadow:0 1px 3px #000; pointer-events:none; }
   #loading { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; background:#111; z-index:9; font-size:18px; }
-  body.vr #bar, body.vr #hint { display:none; }
+  body.vr #bar, body.vr #hint, body.vr #walkpad { display:none !important; }
+  #walkpad { position:fixed; bottom:18px; right:18px; display:none; gap:10px; z-index:5; }
+  #walkpad button { font-size:20px; padding:16px 22px; touch-action:none; }
 </style>
 </head>
 <body>
@@ -27,14 +29,17 @@
   <div id="title">Loading...</div>
   <button id="bGyro">Gyro</button>
   <button id="bVR">Cardboard VR</button>
+  <button id="bWalk">Walk (3D)</button>
   <button id="bMenu">Rooms</button>
   <button id="bClose">Eyes closer</button>
   <button id="bApart">Eyes apart</button>
 </div>
 <div id="menu"></div>
+<div id="walkpad"><button id="wpB">&#9660;</button><button id="wpF">&#9650; Walk</button></div>
 <div id="hint">Drag to look around, tap a ring to move. For the headset: tap Cardboard VR, then look at a ring for 1.5 s.</div>
 <div id="loading">Loading tour...</div>
 <script src="three.min.js"></script>
+<script src="GLTFLoader.js"></script>
 <script>
 // ---------- tour data (coordinates are plan metres: x = east, y = north) ----------
 const EYE = 1.6;
@@ -199,7 +204,7 @@ function applyView(){
 let dragging=false, moved=false, lx=0, ly=0;
 canvas.addEventListener('pointerdown', e => { dragging=true; moved=false; lx=e.clientX; ly=e.clientY; });
 window.addEventListener('pointerup', e => {
-  if (dragging && !moved && !vrOn) tapAt(e.clientX, e.clientY);
+  if (dragging && !moved && !vrOn && !walkMode) tapAt(e.clientX, e.clientY);
   dragging=false;
 });
 window.addEventListener('pointermove', e => {
@@ -221,6 +226,7 @@ let current = null, busy = false;
 const fade = document.getElementById('fade');
 const titleEl = document.getElementById('title');
 async function go(id, first){
+  if (walkMode) leaveWalk();
   if (busy || id === current) return;
   busy = true;
   if (!first) { fade.style.opacity = 1; await new Promise(r=>setTimeout(r, 360)); }
@@ -243,6 +249,7 @@ let gazeT = 0, gazeTarget = null;
 function updateGaze(dt){
   const gazeActive = vrOn || (gyroOn && haveDev);
   reticle.visible = gazeActive && !vrOn ? true : vrOn;
+  if (walkMode) { gazeTarget = null; return; }
   if (!gazeActive || busy) return;
   ray.setFromCamera(new THREE.Vector2(0,0), camera);
   const hit = ray.intersectObjects(hotspots.map(h=>h.mesh), false)[0];
@@ -282,7 +289,8 @@ bVR.onclick = async () => {
 };
 function exitVR(){
   vrOn = false; document.body.classList.remove('vr'); bVR.classList.remove('on'); reticle.visible=false;
-  camera.fov = 75; if (document.fullscreenElement) document.exitFullscreen().catch(()=>{});
+  camera.fov = 75; if (walkMode) document.getElementById('walkpad').style.display = 'flex';
+  if (document.fullscreenElement) document.exitFullscreen().catch(()=>{});
   try { screen.orientation.unlock(); } catch(e){}
   resize();
 }
@@ -296,7 +304,7 @@ window.addEventListener('touchend', () => {
 });
 document.addEventListener('fullscreenchange', () => { if (vrOn && !document.fullscreenElement) exitVR(); });
 bMenu.onclick = () => { menu.style.display = menu.style.display==='block' ? 'none' : 'block'; };
-Object.entries(STOPS).forEach(([id,s]) => { const d=document.createElement('div'); d.textContent=s.name; d.onclick=()=>{ menu.style.display='none'; go(id); }; menu.appendChild(d); });
+Object.entries(STOPS).forEach(([id,s]) => { const d=document.createElement('div'); d.textContent=s.name; d.onclick=()=>{ menu.style.display='none'; if (walkMode && WALKABLE(id)) teleportTo(id); else go(id); }; menu.appendChild(d); });
 
 // ---- eye spacing (Cardboard lenses are ~6.2 cm apart; the half-screens of a phone are usually further apart than that)
 let eyeAdj = Number(localStorage.getItem('eyeAdj') || 0);
@@ -318,10 +326,130 @@ function resize(){
 }
 window.addEventListener('resize', resize); resize();
 
+// ================= WALK MODE (real 3D model + collisions + tilt-to-walk) =================
+const EYE_H = 1.6, BODY_R = 0.16, IPD = 0.064;
+const TILT_START = 28, TILT_FULL = 55, MAX_SPEED = 0.8, MIN_SPEED = 0.2;      // look down 28..55 deg => walk forward, 0.2..0.8 m/s
+const WALK_BOUNDS = {x0:0.28, x1:9.95, y0:4.28, y1:10.6};                      // keep inside the apartment shell
+let walkMode = false, house = null, houseLoading = false, walkLight = [], ceilingMesh = null;
+let wx = 5.6, wy = 8.1;                                                         // plan position (x east, y north), metres
+let grid = null;
+const bWalk = document.getElementById('bWalk');
+function WALKABLE(id){ const s = STOPS[id]; return s && !s.z && s.y > 4.3; }
+
+async function loadCollision(){
+  if (grid) return grid;
+  const j = await (await fetch('collision.json')).json();
+  const bin = atob(j.bits), bytes = new Uint8Array(bin.length);
+  for (let i=0;i<bin.length;i++) bytes[i] = bin.charCodeAt(i);
+  grid = { cell:j.cell, x0:j.x0, y0:j.y0, nx:j.nx, ny:j.ny, bytes };
+  return grid;
+}
+function cellBlocked(x, y){
+  const ix = Math.floor((x-grid.x0)/grid.cell), iy = Math.floor((y-grid.y0)/grid.cell);
+  if (ix<0||iy<0||ix>=grid.nx||iy>=grid.ny) return true;
+  const i = iy*grid.nx+ix; return (grid.bytes[i>>3] >> (i&7)) & 1;
+}
+function blockedAt(x, y){
+  if (x<WALK_BOUNDS.x0||x>WALK_BOUNDS.x1||y<WALK_BOUNDS.y0||y>WALK_BOUNDS.y1) return true;
+  if (cellBlocked(x,y)) return true;
+  for (let k=0;k<12;k++){ const a=k*Math.PI/6; if (cellBlocked(x+Math.cos(a)*BODY_R, y+Math.sin(a)*BODY_R)) return true; }
+  return false;
+}
+function nearestFree(x, y){
+  if (!blockedAt(x,y)) return [x,y];
+  for (let r=0.05; r<2.5; r+=0.05) for (let k=0;k<24;k++){ const a=k*Math.PI/12, px=x+Math.cos(a)*r, py=y+Math.sin(a)*r; if (!blockedAt(px,py)) return [px,py]; }
+  return [x,y];
+}
+function tryMove(dx, dy){
+  const nx = wx+dx, ny = wy+dy;
+  if (!blockedAt(nx,ny)) { wx=nx; wy=ny; return; }
+  if (!blockedAt(nx,wy)) { wx=nx; return; }       // slide along walls
+  if (!blockedAt(wx,ny)) { wy=ny; return; }
+}
+function placeCamera(){ camera.position.set(wx, EYE_H, -wy); }
+
+async function loadHouse(){
+  if (house || houseLoading) return;
+  houseLoading = true;
+  const loading = document.getElementById('loading'); loading.textContent = 'Loading 3D model...'; loading.style.display = 'flex';
+  await loadCollision();
+  await new Promise((res, rej) => new THREE.GLTFLoader().load('house.glb', gltf => {
+    house = gltf.scene; house.position.x = -10;                               // model x includes a +10 m offset
+    house.traverse(o => { if (o.isMesh) {
+      const m = o.material, nm = new THREE.MeshPhongMaterial({ color: m.color ? m.color.clone() : 0xffffff, map: m.map || null, side: THREE.DoubleSide, flatShading: true, specular: 0x000000, shininess: 0 });
+      if (m.transparent || m.opacity < 1) { nm.transparent = true; nm.opacity = m.opacity; nm.depthWrite = false; }
+      if (m.alphaTest) nm.alphaTest = m.alphaTest;
+      o.material = nm; o.frustumCulled = true;
+    }});
+    house.visible = false; scene.add(house);
+    // flat ceiling for the apartment (z = 2.70 m)
+    const cg = new THREE.PlaneGeometry(10.16, 7.0); cg.rotateX(Math.PI/2);
+    ceilingMesh = new THREE.Mesh(cg, new THREE.MeshBasicMaterial({ color: 0xe9e6df, side: THREE.DoubleSide }));
+    ceilingMesh.position.set(5.08, 2.70, -7.5); ceilingMesh.visible = false; scene.add(ceilingMesh);
+    const amb = new THREE.AmbientLight(0xffffff, 0.62), sun = new THREE.DirectionalLight(0xffffff, 0.4); sun.position.set(-3, 8, 4);
+    amb.visible = sun.visible = false; scene.add(amb, sun); walkLight = [amb, sun];
+    res();
+  }, undefined, rej));
+  loading.style.display = 'none'; houseLoading = false;
+}
+async function enterWalk(){
+  try { await loadHouse(); } catch(e){ document.getElementById('loading').textContent = '3D model failed to load'; setTimeout(()=>document.getElementById('loading').style.display='none', 2500); houseLoading=false; return; }
+  walkMode = true;
+  let sx = 5.6, sy = 8.1; const cs = STOPS[current]; if (cs && WALKABLE(current)) { sx = cs.x; sy = cs.y; }
+  [wx, wy] = nearestFree(sx, sy); placeCamera();
+  pano.visible = false; hotspotGroup.visible = false; house.visible = true; ceilingMesh.visible = true; walkLight.forEach(l => l.visible = true);
+  scene.background = new THREE.Color(0xc9d4db); camera.far = 200; camera.near = 0.05; camera.updateProjectionMatrix();
+  bWalk.classList.add('on'); bWalk.textContent = 'Panoramas'; titleEl.textContent = 'Walking - look down to walk';
+  document.getElementById('walkpad').style.display = vrOn ? 'none' : 'flex';
+}
+function leaveWalk(){
+  walkMode = false;
+  if (house) house.visible = false; if (ceilingMesh) ceilingMesh.visible = false; walkLight.forEach(l => l.visible = false);
+  pano.visible = true; hotspotGroup.visible = true; scene.background = null;
+  camera.position.set(0,0,0); camera.far = 2000; camera.near = 0.1; camera.updateProjectionMatrix();
+  bWalk.classList.remove('on'); bWalk.textContent = 'Walk (3D)';
+  document.getElementById('walkpad').style.display = 'none';
+  if (current) titleEl.textContent = STOPS[current].name;
+}
+function teleportTo(id){ const s = STOPS[id]; [wx, wy] = nearestFree(s.x, s.y); placeCamera(); }
+bWalk.onclick = async () => {
+  if (walkMode) {
+    // back to the panorama stop nearest to where you are standing
+    let best = null, bd = 1e9; for (const [id,s] of Object.entries(STOPS)) { if (!WALKABLE(id)) continue; const d = Math.hypot(s.x-wx, s.y-wy); if (d < bd) { bd = d; best = id; } }
+    const keep = current; current = null; await go(best || keep);
+  } else await enterWalk();
+};
+// on-screen / keyboard walking (for when you are not in the headset)
+const keys = {}; let padF = 0, padB = 0;
+window.addEventListener('keydown', e => { keys[e.key.toLowerCase()] = true; });
+window.addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
+const walkpad = document.getElementById('walkpad');
+[['wpF', v => padF = v], ['wpB', v => padB = v]].forEach(([id, set]) => {
+  const b = document.getElementById(id);
+  b.addEventListener('pointerdown', e => { e.stopPropagation(); set(1); }); 
+  ['pointerup','pointerleave','pointercancel'].forEach(ev => b.addEventListener(ev, () => set(0)));
+});
+const _dir = new THREE.Vector3();
+function updateWalk(dt){
+  if (!walkMode || !grid) return;
+  camera.getWorldDirection(_dir);
+  let fx = _dir.x, fy = -_dir.z; const fl = Math.hypot(fx, fy) || 1; fx /= fl; fy /= fl;     // facing direction on the floor plan
+  const pitchDeg = Math.asin(Math.max(-1, Math.min(1, _dir.y))) * 180/Math.PI;
+  let v = 0;
+  if ((gyroOn && haveDev) || vrOn) {
+    if (pitchDeg < -TILT_START) { const t = Math.min(1, (-pitchDeg - TILT_START)/(TILT_FULL - TILT_START)); v = MIN_SPEED + (MAX_SPEED - MIN_SPEED) * t; }
+  }
+  if (keys['w'] || keys['arrowup'] || padF) v = 0.9;
+  if (keys['s'] || keys['arrowdown'] || padB) v = -0.7;
+  let sx = 0; if (keys['a']) sx = -0.7; if (keys['d']) sx = 0.7;
+  if (v || sx) tryMove((fx*v + fy*sx)*dt, (fy*v - fx*sx)*dt);
+  placeCamera();
+}
+
 let last = performance.now();
 function frame(now){
   const dt = Math.min(.1, (now-last)/1000); last = now;
-  applyView(); updateGaze(dt);
+  applyView(); updateGaze(dt); updateWalk(dt);
   // three.js viewport/scissor are in CSS pixels (it multiplies by the pixel ratio itself)
   const w = innerWidth, h = innerHeight;
   renderer.setScissorTest(true); renderer.clear();
@@ -329,8 +457,12 @@ function frame(now){
     camera.aspect = (innerWidth/2)/innerHeight; camera.updateProjectionMatrix();
     // shift each eye's picture towards the middle so the two image centres sit one eye-spacing apart (avoids double vision)
     const d = eyeShift();
+    const off = walkMode ? IPD/2 : 0;     // real stereo depth in the 3D walk mode
+    if (off) camera.translateX(-off);
     renderer.setViewport(d,0,w/2,h);     renderer.setScissor(0,0,w/2,h);   renderer.render(scene,camera);
+    if (off) camera.translateX(2*off);
     renderer.setViewport(w/2-d,0,w/2,h); renderer.setScissor(w/2,0,w/2,h); renderer.render(scene,camera);
+    if (off) camera.translateX(-off);
   } else {
     camera.aspect = innerWidth/innerHeight; camera.updateProjectionMatrix();
     renderer.setViewport(0,0,w,h); renderer.setScissor(0,0,w,h); renderer.render(scene,camera);
