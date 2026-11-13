@@ -31,6 +31,7 @@
   <button id="bVR">Cardboard VR</button>
   <button id="bWalk">Walk (3D)</button>
   <button id="bMenu">Rooms</button>
+  <button id="bHeight">Height</button>
   <button id="bClose">Eyes closer</button>
   <button id="bApart">Eyes apart</button>
 </div>
@@ -204,7 +205,7 @@ function applyView(){
 let dragging=false, moved=false, lx=0, ly=0;
 canvas.addEventListener('pointerdown', e => { dragging=true; moved=false; lx=e.clientX; ly=e.clientY; });
 window.addEventListener('pointerup', e => {
-  if (dragging && !moved && !vrOn && !walkMode) tapAt(e.clientX, e.clientY);
+  if (dragging && !moved && !vrOn) { if (walkMode) tapWalk(e.clientX, e.clientY); else tapAt(e.clientX, e.clientY); }
   dragging=false;
 });
 window.addEventListener('pointermove', e => {
@@ -298,6 +299,7 @@ function exitVR(){
 let lastTap = 0;
 window.addEventListener('touchend', () => {
   const n = Date.now();
+  if (walkMode && hoverIt && (vrOn || gyroOn)) { toggleInter(hoverIt); lockIt = hoverIt; dwell = 0; lastTap = 0; return; }   // tap while looking at an object = use it now
   if (gazeTarget && (vrOn || gyroOn)) { const to = gazeTarget.to; gazeTarget = null; gazeT = 0; go(to); lastTap = 0; return; }   // tap while looking at a ring = go now
   if (vrOn && n-lastTap < 350) exitVR();
   lastTap = n;
@@ -327,21 +329,35 @@ function resize(){
 window.addEventListener('resize', resize); resize();
 
 // ================= WALK MODE (real 3D model + collisions + tilt-to-walk) =================
-const EYE_H = 1.6, BODY_R = 0.16, IPD = 0.064;
+let EYE_H = Number(localStorage.getItem('eyeH') || 1.60);                      // 1.60 = 170 cm person, 1.49 = 159 cm person
+const BODY_R = 0.16, IPD = 0.064;
 const TILT_START = 28, TILT_FULL = 55, MAX_SPEED = 0.8, MIN_SPEED = 0.2;      // look down 28..55 deg => walk forward, 0.2..0.8 m/s
-const WALK_BOUNDS = {x0:0.28, x1:9.95, y0:4.28, y1:10.6};                      // keep inside the apartment shell
-let walkMode = false, house = null, houseLoading = false, walkLight = [], ceilingMesh = null;
+const WALK_BOUNDS = {x0:0.12, x1:10.06, y0:0.12, y1:10.62};                    // apartment + garden, inside the fence
+let walkMode = false, house = null, houseLoading = false, walkLight = [], ceilingMesh = null, groundMesh = null;
 let wx = 5.6, wy = 8.1;                                                         // plan position (x east, y north), metres
 let grid = null;
 const bWalk = document.getElementById('bWalk');
-function WALKABLE(id){ const s = STOPS[id]; return s && !s.z && s.y > 4.3; }
+const bHeight = document.getElementById('bHeight');
+function showHeight(){ bHeight.textContent = 'Height: ' + (EYE_H > 1.55 ? '170 cm' : '159 cm'); }
+bHeight.onclick = () => { EYE_H = EYE_H > 1.55 ? 1.49 : 1.60; localStorage.setItem('eyeH', EYE_H); showHeight(); if (walkMode) placeCamera(); };
+showHeight();
+function WALKABLE(id){ return !!STOPS[id]; }
+let wz = 0;                                                                     // current ground height under the player
+function groundAt(x, y){
+  const ix = Math.floor((x-grid.x0)/grid.cell), iy = Math.floor((y-grid.y0)/grid.cell);
+  if (ix<0||iy<0||ix>=grid.nx||iy>=grid.ny) return 0;
+  return grid.ground[iy*grid.nx+ix] / 100;
+}
 
 async function loadCollision(){
   if (grid) return grid;
   const j = await (await fetch('collision.json')).json();
   const bin = atob(j.bits), bytes = new Uint8Array(bin.length);
   for (let i=0;i<bin.length;i++) bytes[i] = bin.charCodeAt(i);
-  grid = { cell:j.cell, x0:j.x0, y0:j.y0, nx:j.nx, ny:j.ny, bytes };
+  const gb = atob(j.ground), gbytes = new Uint8Array(gb.length);
+  for (let i=0;i<gb.length;i++) gbytes[i] = gb.charCodeAt(i);
+  const ground = new Int16Array(gbytes.buffer);
+  grid = { cell:j.cell, x0:j.x0, y0:j.y0, nx:j.nx, ny:j.ny, bytes, ground };
   return grid;
 }
 function cellBlocked(x, y){
@@ -349,10 +365,11 @@ function cellBlocked(x, y){
   if (ix<0||iy<0||ix>=grid.nx||iy>=grid.ny) return true;
   const i = iy*grid.nx+ix; return (grid.bytes[i>>3] >> (i&7)) & 1;
 }
+function ptBlocked(x, y){ return cellBlocked(x,y) || gateBlocked(x,y); }
 function blockedAt(x, y){
   if (x<WALK_BOUNDS.x0||x>WALK_BOUNDS.x1||y<WALK_BOUNDS.y0||y>WALK_BOUNDS.y1) return true;
-  if (cellBlocked(x,y)) return true;
-  for (let k=0;k<12;k++){ const a=k*Math.PI/6; if (cellBlocked(x+Math.cos(a)*BODY_R, y+Math.sin(a)*BODY_R)) return true; }
+  if (ptBlocked(x,y)) return true;
+  for (let k=0;k<12;k++){ const a=k*Math.PI/6; if (ptBlocked(x+Math.cos(a)*BODY_R, y+Math.sin(a)*BODY_R)) return true; }
   return false;
 }
 function nearestFree(x, y){
@@ -360,13 +377,104 @@ function nearestFree(x, y){
   for (let r=0.05; r<2.5; r+=0.05) for (let k=0;k<24;k++){ const a=k*Math.PI/12, px=x+Math.cos(a)*r, py=y+Math.sin(a)*r; if (!blockedAt(px,py)) return [px,py]; }
   return [x,y];
 }
+function stepOk(x, y){ return Math.abs(groundAt(x,y) - groundAt(wx,wy)) <= 0.3; }   // no jumping up/down more than 30 cm
 function tryMove(dx, dy){
   const nx = wx+dx, ny = wy+dy;
-  if (!blockedAt(nx,ny)) { wx=nx; wy=ny; return; }
-  if (!blockedAt(nx,wy)) { wx=nx; return; }       // slide along walls
-  if (!blockedAt(wx,ny)) { wy=ny; return; }
+  if (!blockedAt(nx,ny) && stepOk(nx,ny)) { wx=nx; wy=ny; return; }
+  if (!blockedAt(nx,wy) && stepOk(nx,wy)) { wx=nx; return; }       // slide along walls
+  if (!blockedAt(wx,ny) && stepOk(wx,ny)) { wy=ny; return; }
 }
-function placeCamera(){ camera.position.set(wx, EYE_H, -wy); }
+function placeCamera(dt){
+  const target = groundAt(wx, wy);
+  wz = dt ? wz + (target - wz) * Math.min(1, dt*8) : target;       // smooth steps on the stairs
+  camera.position.set(wx, wz + EYE_H, -wy);
+}
+
+// ---------- interactive objects (doors, drawers, cabinet doors) ----------
+const INT_DWELL = 1.2, INT_REACH = 2.6;
+const MODELLED_OPEN = new Set(['office_door','bath_door','bedroom_door']);     // these are modelled open; everything else is modelled closed
+let inter = [], interById = {}, gateList = [], interMeshes = [], houseMeshes = [];
+let hoverIt = null, lockIt = null, dwell = 0, occT = 0, occluded = false;
+const easeT = t => t*t*(3-2*t);
+function isOpen(it){ return MODELLED_OPEN.has(it.id) ? it.target < 0.5 : it.target > 0.5; }
+function gateBlocked(x, y){
+  for (const g of gateList) { const r = g.rect; if (x>=r[0] && x<=r[1] && y>=r[2] && y<=r[3] && g.blocked()) return true; }
+  return false;
+}
+function applyPose(it){
+  const e = easeT(it.t);
+  if (it.type === 'hinge') it.pivot3.rotation.y = THREE.MathUtils.degToRad(it.delta) * e;
+  else it.pivot3.position.set(it.base.x + it.delta[0]*e, it.base.y, it.base.z - it.delta[1]*e);
+}
+async function setupInteractions(){
+  inter = []; interById = {}; gateList = []; interMeshes = []; houseMeshes = [];
+  let man = []; try { man = await (await fetch('interactions.json')).json(); } catch(e){ return; }
+  const gateGroups = [];
+  for (const e of man) {
+    if (e.gateGroup) { gateGroups.push(e); continue; }
+    const obj = house.getObjectByName('INT_' + e.id); if (!obj) continue;
+    const base = e.pivot ? new THREE.Vector3(e.pivot[0] + 10, 0, -e.pivot[1]) : new THREE.Vector3(0,0,0);   // house-local (model x has +10 offset)
+    const pv = new THREE.Group(); pv.position.copy(base);
+    obj.parent.remove(obj); obj.position.set(-base.x, -base.y, -base.z); pv.add(obj); house.add(pv);
+    const it = { id:e.id, label:e.label, type:e.type, delta:e.delta, group:e.group||null, pivot3:pv, base:base.clone(), t:0, target:0 };
+    inter.push(it); interById[e.id] = it;
+    obj.traverse(o => { if (o.isMesh) { o.userData.intIndex = inter.length-1; interMeshes.push(o); } });
+    if (e.gate && e.gate.closedBlocks) gateList.push({ rect:e.gate.rect, blocked:() => !isOpen(it) });
+  }
+  for (const g of gateGroups) gateList.push({ rect:g.rect, blocked:() => g.needsOpen.some(id => interById[id] && !isOpen(interById[id])) });
+  house.traverse(o => { if (o.isMesh && o.userData.intIndex === undefined) houseMeshes.push(o); });
+  console.log('interactive objects:', inter.length, 'gates:', gateList.length);
+}
+function toggleInter(it){
+  const nt = it.target > 0.5 ? 0 : 1;
+  inter.forEach(o => { if (o === it || (it.group && o.group === it.group)) o.target = nt; });
+}
+function setEmissive(it, on){
+  if (!it) return;
+  const idx = inter.indexOf(it);
+  interMeshes.forEach(m => { if (m.userData.intIndex === idx) m.material.emissive.setHex(on ? 0x26466e : 0x000000); });
+}
+// gaze label + fill, attached to the camera so both eyes see them
+const labelCanvas = document.createElement('canvas'); labelCanvas.width = 512; labelCanvas.height = 96;
+const labelTex = new THREE.CanvasTexture(labelCanvas);
+const labelSprite = new THREE.Sprite(new THREE.SpriteMaterial({ map:labelTex, depthTest:false, transparent:true }));
+labelSprite.scale.set(0.34, 0.064, 1); labelSprite.position.set(0, -0.085, -1); labelSprite.renderOrder = 22; labelSprite.visible = false; camera.add(labelSprite);
+const fillDisc = new THREE.Mesh(new THREE.CircleGeometry(0.02, 32), new THREE.MeshBasicMaterial({ color:0x6fb6ff, depthTest:false, transparent:true, opacity:.8 }));
+fillDisc.position.z = -1; fillDisc.renderOrder = 21; fillDisc.visible = false; camera.add(fillDisc);
+function setLabel(text){
+  const x = labelCanvas.getContext('2d'); x.clearRect(0,0,512,96);
+  x.fillStyle = 'rgba(0,0,0,.65)'; x.fillRect(4,10,504,76); x.fillStyle = '#fff'; x.font = 'bold 40px sans-serif'; x.textAlign = 'center'; x.textBaseline = 'middle'; x.fillText(text, 256, 50);
+  labelTex.needsUpdate = true;
+}
+function hoverLabel(it){ return it.label + ' - ' + (isOpen(it) ? 'look to close' : 'look to open'); }
+function updateInteract(dt){
+  for (const it of inter) { const d = it.target - it.t; if (Math.abs(d) > 1e-4) { it.t += Math.sign(d) * Math.min(Math.abs(d), dt/0.8); applyPose(it); } }
+  if (!walkMode || !inter.length) { fillDisc.visible = labelSprite.visible = false; return; }
+  const active = vrOn || (gyroOn && haveDev);
+  let it = null, hitDist = 0;
+  if (active) {
+    ray.setFromCamera(new THREE.Vector2(0,0), camera); ray.far = INT_REACH;
+    const hit = ray.intersectObjects(interMeshes, false)[0]; ray.far = Infinity;
+    if (hit) { it = inter[hit.object.userData.intIndex]; hitDist = hit.distance; occT -= dt;
+      if (occT <= 0) { occT = 0.25; const r2 = ray.intersectObjects(houseMeshes, false)[0]; occluded = !!(r2 && r2.distance < hitDist - 0.05); }
+      if (occluded) it = null; }
+  }
+  if (lockIt && it !== lockIt) lockIt = null;
+  if (it !== hoverIt) { setEmissive(hoverIt, false); hoverIt = it; dwell = 0; if (it) { setEmissive(it, true); setLabel(hoverLabel(it)); } }
+  if (it && it !== lockIt) {
+    dwell += dt; fillDisc.visible = true; labelSprite.visible = true;
+    const p = Math.min(1, dwell / INT_DWELL); fillDisc.scale.set(Math.max(.01,p), Math.max(.01,p), 1);
+    if (dwell >= INT_DWELL) { toggleInter(it); lockIt = it; dwell = 0; setLabel(it.label + ' - ' + (isOpen(it) ? 'open' : 'closed')); }
+  } else { fillDisc.visible = false; labelSprite.visible = !!it; }
+}
+function tapWalk(px, py){
+  if (!inter.length) return false;
+  ray.setFromCamera(new THREE.Vector2(px/innerWidth*2-1, -(py/innerHeight*2-1)), camera); ray.far = INT_REACH + 0.6;
+  const hit = ray.intersectObjects(interMeshes, false)[0]; ray.far = Infinity;
+  if (!hit) return false;
+  const r2 = ray.intersectObjects(houseMeshes, false)[0]; if (r2 && r2.distance < hit.distance - 0.05) return false;
+  toggleInter(inter[hit.object.userData.intIndex]); return true;
+}
 
 async function loadHouse(){
   if (house || houseLoading) return;
@@ -386,10 +494,14 @@ async function loadHouse(){
     const cg = new THREE.PlaneGeometry(10.16, 7.0); cg.rotateX(Math.PI/2);
     ceilingMesh = new THREE.Mesh(cg, new THREE.MeshBasicMaterial({ color: 0xe9e6df, side: THREE.DoubleSide }));
     ceilingMesh.position.set(5.08, 2.70, -7.5); ceilingMesh.visible = false; scene.add(ceilingMesh);
+    // outdoor ground (lawn / street level at -0.90 m) and lights
+    const gg = new THREE.PlaneGeometry(300, 300); gg.rotateX(-Math.PI/2);
+    groundMesh = new THREE.Mesh(gg, new THREE.MeshBasicMaterial({ color: 0x9aa98b })); groundMesh.position.set(5, -0.905, -5); groundMesh.visible = false; scene.add(groundMesh);
     const amb = new THREE.AmbientLight(0xffffff, 0.62), sun = new THREE.DirectionalLight(0xffffff, 0.4); sun.position.set(-3, 8, 4);
     amb.visible = sun.visible = false; scene.add(amb, sun); walkLight = [amb, sun];
     res();
   }, undefined, rej));
+  await setupInteractions();
   loading.style.display = 'none'; houseLoading = false;
 }
 async function enterWalk(){
@@ -397,14 +509,14 @@ async function enterWalk(){
   walkMode = true;
   let sx = 5.6, sy = 8.1; const cs = STOPS[current]; if (cs && WALKABLE(current)) { sx = cs.x; sy = cs.y; }
   [wx, wy] = nearestFree(sx, sy); placeCamera();
-  pano.visible = false; hotspotGroup.visible = false; house.visible = true; ceilingMesh.visible = true; walkLight.forEach(l => l.visible = true);
-  scene.background = new THREE.Color(0xc9d4db); camera.far = 200; camera.near = 0.05; camera.updateProjectionMatrix();
+  pano.visible = false; hotspotGroup.visible = false; house.visible = true; ceilingMesh.visible = true; groundMesh.visible = true; walkLight.forEach(l => l.visible = true);
+  scene.background = new THREE.Color(0xbcd3e6); camera.far = 200; camera.near = 0.05; camera.updateProjectionMatrix();
   bWalk.classList.add('on'); bWalk.textContent = 'Panoramas'; titleEl.textContent = 'Walking - look down to walk';
   document.getElementById('walkpad').style.display = vrOn ? 'none' : 'flex';
 }
 function leaveWalk(){
-  walkMode = false;
-  if (house) house.visible = false; if (ceilingMesh) ceilingMesh.visible = false; walkLight.forEach(l => l.visible = false);
+  walkMode = false; setEmissive(hoverIt, false); hoverIt = null; lockIt = null;
+  if (house) house.visible = false; if (ceilingMesh) ceilingMesh.visible = false; if (groundMesh) groundMesh.visible = false; walkLight.forEach(l => l.visible = false);
   pano.visible = true; hotspotGroup.visible = true; scene.background = null;
   camera.position.set(0,0,0); camera.far = 2000; camera.near = 0.1; camera.updateProjectionMatrix();
   bWalk.classList.remove('on'); bWalk.textContent = 'Walk (3D)';
@@ -432,6 +544,7 @@ const walkpad = document.getElementById('walkpad');
 const _dir = new THREE.Vector3();
 function updateWalk(dt){
   if (!walkMode || !grid) return;
+  if (gateBlocked(wx, wy)) [wx, wy] = nearestFree(wx, wy);          // a door closed on you: step out
   camera.getWorldDirection(_dir);
   let fx = _dir.x, fy = -_dir.z; const fl = Math.hypot(fx, fy) || 1; fx /= fl; fy /= fl;     // facing direction on the floor plan
   const pitchDeg = Math.asin(Math.max(-1, Math.min(1, _dir.y))) * 180/Math.PI;
@@ -443,13 +556,13 @@ function updateWalk(dt){
   if (keys['s'] || keys['arrowdown'] || padB) v = -0.7;
   let sx = 0; if (keys['a']) sx = -0.7; if (keys['d']) sx = 0.7;
   if (v || sx) tryMove((fx*v + fy*sx)*dt, (fy*v - fx*sx)*dt);
-  placeCamera();
+  placeCamera(dt);
 }
 
 let last = performance.now();
 function frame(now){
   const dt = Math.min(.1, (now-last)/1000); last = now;
-  applyView(); updateGaze(dt); updateWalk(dt);
+  applyView(); updateGaze(dt); updateWalk(dt); updateInteract(dt);
   // three.js viewport/scissor are in CSS pixels (it multiplies by the pixel ratio itself)
   const w = innerWidth, h = innerHeight;
   renderer.setScissorTest(true); renderer.clear();
