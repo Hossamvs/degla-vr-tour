@@ -1,0 +1,321 @@
+[
+  {
+    "id": "office_door",
+    "label": "Office door",
+    "type": "hinge",
+    "pivot": [
+      5.85,
+      7.45
+    ],
+    "delta": -90,
+    "gate": {
+      "rect": [
+        4.98,
+        5.82,
+        7.4,
+        7.72
+      ],
+      "closedBlocks": true
+    }
+  },
+  {
+    "id": "bath_door",
+    "label": "Bathroom door",
+    "type": "hinge",
+    "pivot": [
+      7.97,
+      7.745
+    ],
+    "delta": 90,
+    "gate": {
+      "rect": [
+        7.78,
+        8.05,
+        7.73,
+        8.52
+      ],
+      "closedBlocks": true
+    }
+  },
+  {
+    "id": "bedroom_door",
+    "label": "Bedroom door",
+    "type": "slide",
+    "pivot": null,
+    "delta": [
+      0.95,
+      0.0
+    ],
+    "parts": [
+      "INT_bedroom_door_0",
+      "INT_bedroom_door_1",
+      "INT_bedroom_door_2",
+      "INT_bedroom_door_3"
+    ],
+    "gate": {
+      "rect": [
+        6.86,
+        7.76,
+        7.4,
+        7.72
+      ],
+      "closedBlocks": true
+    }
+  },
+  {
+    "id": "sec_L",
+    "label": "Security door",
+    "type": "hinge",
+    "pivot": [
+      0.55,
+      3.92
+    ],
+    "delta": -100,
+    "group": "garden_gate"
+  },
+  {
+    "id": "sec_R",
+    "label": "Security door",
+    "type": "hinge",
+    "pivot": [
+      2.58,
+      3.92
+    ],
+    "delta": 100,
+    "group": "garden_gate"
+  },
+  {
+    "id": "garden_slider",
+    "label": "Garden door",
+    "type": "slide",
+    "pivot": null,
+    "delta": [
+      -0.93,
+      0.0
+    ],
+    "group": "garden_gate",
+    "parts": [
+      "INT_garden_slider_0",
+      "INT_garden_slider_1",
+      "INT_garden_slider_2",
+      "INT_garden_slider_3",
+      "INT_garden_slider_4",
+      "INT_garden_slider_5",
+      "INT_garden_slider_6",
+      "INT_garden_slider_7",
+      "INT_garden_slider_8",
+      "INT_garden_slider_9"
+    ]
+  },
+  {
+    "gateGroup": "garden_gate",
+    "rect": [
+      0.7,
+      2.45,
+      3.78,
+      4.3
+    ],
+    "needsOpen": [
+      "sec_L",
+      "sec_R",
+      "garden_slider"
+    ]
+  },
+  {
+    "id": "wardrobe_1",
+    "label": "Wardrobe door 1",
+    "type": "slide",
+    "pivot": null,
+    "delta": [
+      0.0,
+      0.98
+    ],
+    "parts": [
+      "INT_wardrobe_1_0",
+      "INT_wardrobe_1_1",
+      "INT_wardrobe_1_2",
+      "INT_wardrobe_1_3",
+      "INT_wardrobe_1_4",
+      "INT_wardrobe_1_5",
+      "INT_wardrobe_1_6"
+    ]
+  },
+  {
+    "id": "wardrobe_2",
+    "label": "Wardrobe door 2",
+    "type": "slide",
+    "pivot": null,
+    "delta": [
+      0.0,
+      0.98
+    ],
+    "parts": [
+      "INT_wardrobe_2_0",
+      "INT_wardrobe_2_1",
+      "INT_wardrobe_2_2",
+      "INT_wardrobe_2_3",
+      "INT_wardrobe_2_4",
+      "INT_wardrobe_2_5",
+      "INT_wardrobe_2_6",
+      "INT_wardrobe_2_7"
+    ]
+  },
+  {
+    "id": "wardrobe_3",
+    "label": "Wardrobe door 3",
+    "type": "slide",
+    "pivot": null,
+    "delta": [
+      0.0,
+      -0.98
+    ],
+    "parts": [
+      "INT_wardrobe_3_0",
+      "INT_wardrobe_3_1",
+      "INT_wardrobe_3_2",
+      "INT_wardrobe_3_3",
+      "INT_wardrobe_3_4",
+      "INT_wardrobe_3_5"
+    ]
+  },
+  {
+    "id": "k_drawer1",
+    "label": "Drawer",
+    "type": "slide",
+    "pivot": null,
+    "delta": [
+      0.0,
+      -0.4
+    ]
+  },
+  {
+    "id": "k_drawer2",
+    "label": "Drawer",
+    "type": "slide",
+    "pivot": null,
+    "delta": [
+      0.0,
+      -0.4
+    ]
+  },
+  {
+    "id": "k_drawer3",
+    "label": "Drawer",
+    "type": "slide",
+    "pivot": null,
+    "delta": [
+      0.0,
+      -0.4
+    ]
+  },
+  {
+    "id": "k_sinkdoor",
+    "label": "Cabinet door",
+    "type": "hinge",
+    "pivot": [
+      6.5219999999999985,
+      10.04
+    ],
+    "delta": -100
+  },
+  {
+    "id": "k_wall1",
+    "label": "Cabinet door",
+    "type": "hinge",
+    "pivot": [
+      5.062000000000003,
+      10.29
+    ],
+    "delta": -100
+  },
+  {
+    "id": "k_wall2",
+    "label": "Cabinet door",
+    "type": "hinge",
+    "pivot": [
+      5.061999999999999,
+      10.29
+    ],
+    "delta": -100
+  },
+  {
+    "id": "k_wall3",
+    "label": "Cabinet door",
+    "type": "hinge",
+    "pivot": [
+      5.622,
+      10.29
+    ],
+    "delta": -100
+  },
+  {
+    "id": "k_wall4",
+    "label": "Cabinet door",
+    "type": "hinge",
+    "pivot": [
+      5.622,
+      10.29
+    ],
+    "delta": -100
+  },
+  {
+    "id": "k_wall5",
+    "label": "Cabinet door",
+    "type": "hinge",
+    "pivot": [
+      6.071999999999999,
+      10.29
+    ],
+    "delta": -100
+  },
+  {
+    "id": "k_wall6",
+    "label": "Cabinet door",
+    "type": "hinge",
+    "pivot": [
+      6.071999999999999,
+      10.29
+    ],
+    "delta": -100
+  },
+  {
+    "id": "k_wall7",
+    "label": "Cabinet door",
+    "type": "hinge",
+    "pivot": [
+      6.5219999999999985,
+      10.29
+    ],
+    "delta": -100
+  },
+  {
+    "id": "k_wall8",
+    "label": "Cabinet door",
+    "type": "hinge",
+    "pivot": [
+      6.5219999999999985,
+      10.29
+    ],
+    "delta": -100
+  },
+  {
+    "id": "k_wall9",
+    "label": "Cabinet door",
+    "type": "hinge",
+    "pivot": [
+      7.818000000000001,
+      10.29
+    ],
+    "delta": 100
+  },
+  {
+    "id": "k_wall10",
+    "label": "Cabinet door",
+    "type": "hinge",
+    "pivot": [
+      7.818000000000001,
+      10.29
+    ],
+    "delta": 100
+  }
+]

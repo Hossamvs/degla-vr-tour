@@ -412,13 +412,16 @@ async function setupInteractions(){
   const gateGroups = [];
   for (const e of man) {
     if (e.gateGroup) { gateGroups.push(e); continue; }
-    const obj = house.getObjectByName('INT_' + e.id); if (!obj) continue;
+    const names = e.parts || ['INT_' + e.id];
+    const objs = names.map(n => house.getObjectByName(n)).filter(Boolean); if (!objs.length) continue;
     const base = e.pivot ? new THREE.Vector3(e.pivot[0] + 10, 0, -e.pivot[1]) : new THREE.Vector3(0,0,0);   // house-local (model x has +10 offset)
-    const pv = new THREE.Group(); pv.position.copy(base);
-    obj.parent.remove(obj); obj.position.set(-base.x, -base.y, -base.z); pv.add(obj); house.add(pv);
+    const pv = new THREE.Group(); pv.position.copy(base); house.add(pv);
     const it = { id:e.id, label:e.label, type:e.type, delta:e.delta, group:e.group||null, pivot3:pv, base:base.clone(), t:0, target:0 };
     inter.push(it); interById[e.id] = it;
-    obj.traverse(o => { if (o.isMesh) { o.userData.intIndex = inter.length-1; interMeshes.push(o); } });
+    for (const obj of objs) {
+      obj.parent.remove(obj); obj.position.set(-base.x, -base.y, -base.z); pv.add(obj);
+      obj.traverse(o => { if (o.isMesh) { o.userData.intIndex = inter.length-1; interMeshes.push(o); } });
+    }
     if (e.gate && e.gate.closedBlocks) gateList.push({ rect:e.gate.rect, blocked:() => !isOpen(it) });
   }
   for (const g of gateGroups) gateList.push({ rect:g.rect, blocked:() => g.needsOpen.some(id => interById[id] && !isOpen(interById[id])) });
@@ -476,6 +479,14 @@ function tapWalk(px, py){
   toggleInter(inter[hit.object.userData.intIndex]); return true;
 }
 
+function convertMats(root){
+  root.traverse(o => { if (o.isMesh) {
+    const m = o.material, nm = new THREE.MeshPhongMaterial({ color: m.color ? m.color.clone() : 0xffffff, map: m.map || null, side: THREE.DoubleSide, flatShading: true, specular: 0x000000, shininess: 0 });
+    if (m.transparent || m.opacity < 1) { nm.transparent = true; nm.opacity = m.opacity; nm.depthWrite = false; }
+    if (m.alphaTest) nm.alphaTest = m.alphaTest;
+    o.material = nm; o.frustumCulled = true;
+  }});
+}
 async function loadHouse(){
   if (house || houseLoading) return;
   houseLoading = true;
@@ -483,12 +494,7 @@ async function loadHouse(){
   await loadCollision();
   await new Promise((res, rej) => new THREE.GLTFLoader().load('house.glb', gltf => {
     house = gltf.scene; house.position.x = -10;                               // model x includes a +10 m offset
-    house.traverse(o => { if (o.isMesh) {
-      const m = o.material, nm = new THREE.MeshPhongMaterial({ color: m.color ? m.color.clone() : 0xffffff, map: m.map || null, side: THREE.DoubleSide, flatShading: true, specular: 0x000000, shininess: 0 });
-      if (m.transparent || m.opacity < 1) { nm.transparent = true; nm.opacity = m.opacity; nm.depthWrite = false; }
-      if (m.alphaTest) nm.alphaTest = m.alphaTest;
-      o.material = nm; o.frustumCulled = true;
-    }});
+    convertMats(house);
     house.visible = false; scene.add(house);
     // flat ceiling for the apartment (z = 2.70 m)
     const cg = new THREE.PlaneGeometry(10.16, 7.0); cg.rotateX(Math.PI/2);
@@ -501,7 +507,9 @@ async function loadHouse(){
     amb.visible = sun.visible = false; scene.add(amb, sun); walkLight = [amb, sun];
     res();
   }, undefined, rej));
-  await setupInteractions();
+  let intGltf = null;
+  try { intGltf = await new Promise((res, rej) => new THREE.GLTFLoader().load('interactive.glb', res, undefined, rej)); } catch(e){ console.log('no interactive.glb'); }
+  if (intGltf) { convertMats(intGltf.scene); house.add(intGltf.scene); await setupInteractions(); }
   loading.style.display = 'none'; houseLoading = false;
 }
 async function enterWalk(){
